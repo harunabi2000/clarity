@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { MapPin, Clock, Navigation2 } from 'lucide-react';
 import { generateRoute } from '@/lib/route-utils';
 import { useToast } from '@/components/ui/use-toast';
+import RouteMap from '@/components/RouteMap';
 
 const activities = [
   {
@@ -34,6 +35,8 @@ const Index = () => {
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
   const [duration, setDuration] = useState('30');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [routeData, setRouteData] = useState<any>(null);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const { toast } = useToast();
 
   const handleGenerateRoute = async () => {
@@ -48,26 +51,26 @@ const Index = () => {
 
     setIsGenerating(true);
     try {
-      // Use browser's geolocation API to get current position
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           try {
+            const coords = {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            };
+            setUserLocation([coords.latitude, coords.longitude]);
+            
             const route = await generateRoute(
-              {
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-              },
+              coords,
               Number(duration),
               selectedActivity
             );
             
+            setRouteData(route);
             toast({
               title: "Route generated!",
               description: "Your route has been successfully created.",
             });
-            
-            // Here you would typically update state to show the route on a map
-            console.log('Generated route:', route);
           } catch (error) {
             toast({
               title: "Error",
@@ -119,7 +122,7 @@ const Index = () => {
         </section>
 
         {selectedActivity && (
-          <section className="animate-fade-in">
+          <section className="animate-fade-in space-y-6">
             <h2 className="text-2xl font-semibold mb-6">Route Details</h2>
             <div className="glass-panel rounded-lg p-6 space-y-6">
               <div className="flex items-center space-x-4">
@@ -155,6 +158,13 @@ const Index = () => {
                 <span>{isGenerating ? 'Generating...' : 'Generate Route'}</span>
               </button>
             </div>
+
+            {userLocation && routeData && (
+              <div className="mt-6">
+                <h2 className="text-2xl font-semibold mb-4">Your Route</h2>
+                <RouteMap route={routeData} center={userLocation} />
+              </div>
+            )}
           </section>
         )}
       </div>

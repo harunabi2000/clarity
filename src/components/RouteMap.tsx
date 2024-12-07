@@ -1,0 +1,47 @@
+import React from 'react';
+import { MapContainer, TileLayer, Polyline } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix for default markers
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+interface RouteMapProps {
+  route: any;
+  center: [number, number];
+}
+
+const RouteMap: React.FC<RouteMapProps> = ({ route, center }) => {
+  const coordinates = route?.routes?.[0]?.geometry?.coordinates || [];
+  const positions = coordinates.map((coord: [number, number]) => [coord[1], coord[0]]);
+
+  return (
+    <div className="h-[400px] w-full rounded-lg overflow-hidden shadow-lg">
+      <MapContainer
+        center={center}
+        zoom={13}
+        style={{ height: '100%', width: '100%' }}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        {positions.length > 0 && (
+          <Polyline
+            positions={positions}
+            color="#3B82F6"
+            weight={3}
+            opacity={0.7}
+          />
+        )}
+      </MapContainer>
+    </div>
+  );
+};
+
+export default RouteMap;
