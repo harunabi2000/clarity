@@ -56,7 +56,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ route, center }) => {
                 </div>
               </Popup>
             </Marker>
-          )}
+          ))}
         </MapContainer>
       </div>
       
