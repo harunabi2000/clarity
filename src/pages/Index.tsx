@@ -29,7 +29,7 @@ const Index = () => {
   return (
     <div className="min-h-screen p-6 animate-fade-in">
       <header className="text-center mb-12">
-        <h1 className="text-4xl font-bold mb-2">MindfulPath</h1>
+        <h1 className="text-4xl font-bold mb-2">Clarity</h1>
         <p className="text-gray-600">Discover routes that bring peace of mind</p>
       </header>
 
