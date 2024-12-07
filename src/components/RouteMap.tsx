@@ -1,5 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet';
+import { Button } from "@/components/ui/button";
+import { Navigation } from 'lucide-react';
+import NavigationView from './NavigationView';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -17,13 +20,13 @@ interface RouteMapProps {
 }
 
 const RouteMap: React.FC<RouteMapProps> = ({ route, center }) => {
+  const [showNavigation, setShowNavigation] = useState(false);
   const coordinates = route?.routes?.[0]?.geometry?.coordinates || [];
   const positions = coordinates.map((coord: [number, number]) => [coord[1], coord[0]]);
-  const steps = route?.routes?.[0]?.legs?.flatMap((leg: any) => leg.steps) || [];
 
   return (
     <div className="space-y-4">
-      <div className="h-[400px] w-full rounded-lg overflow-hidden shadow-lg">
+      <div className="h-[400px] w-full rounded-lg overflow-hidden shadow-lg relative">
         <MapContainer
           center={center}
           zoom={13}
@@ -41,43 +44,24 @@ const RouteMap: React.FC<RouteMapProps> = ({ route, center }) => {
               opacity={0.7}
             />
           )}
-          {steps.map((step: any, index: number) => (
-            <Marker
-              key={index}
-              position={[step.maneuver.location[1], step.maneuver.location[0]]}
-            >
-              <Popup>
-                <div className="p-2">
-                  <p className="font-medium">{step.maneuver.type}</p>
-                  <p>{step.name}</p>
-                  <p className="text-sm text-gray-600">
-                    {(step.distance / 1000).toFixed(1)} km
-                  </p>
-                </div>
-              </Popup>
-            </Marker>
-          ))}
         </MapContainer>
-      </div>
-      
-      <div className="space-y-2 p-4 bg-white rounded-lg shadow">
-        <h3 className="text-lg font-semibold mb-2">Navigation Instructions</h3>
-        <div className="space-y-2">
-          {steps.map((step: any, index: number) => (
-            <div key={index} className="flex items-start space-x-3 p-2 hover:bg-gray-50 rounded">
-              <div className="flex-shrink-0 w-6 h-6 bg-primary text-white rounded-full flex items-center justify-center text-sm">
-                {index + 1}
-              </div>
-              <div>
-                <p>{step.maneuver.type}</p>
-                <p className="text-sm text-gray-600">
-                  {step.name} ({(step.distance / 1000).toFixed(1)} km)
-                </p>
-              </div>
-            </div>
-          ))}
+        <div className="absolute bottom-4 right-4 z-[1000]">
+          <Button 
+            onClick={() => setShowNavigation(true)}
+            className="bg-primary hover:bg-primary/90"
+          >
+            <Navigation className="mr-2 h-4 w-4" />
+            Start Navigation
+          </Button>
         </div>
       </div>
+
+      {showNavigation && (
+        <NavigationView 
+          route={route} 
+          onClose={() => setShowNavigation(false)} 
+        />
+      )}
     </div>
   );
 };
