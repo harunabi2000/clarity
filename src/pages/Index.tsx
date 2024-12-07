@@ -20,6 +20,12 @@ const activities = [
     icon: '🚴‍♂️',
     description: 'Explore and energize yourself',
   },
+  {
+    id: 'driving',
+    title: 'Driving',
+    icon: '🚗',
+    description: 'Take a mindful scenic drive',
+  },
 ];
 
 const Index = () => {
@@ -36,14 +42,14 @@ const Index = () => {
       <div className="max-w-4xl mx-auto">
         <section className="mb-12 animate-scale-in">
           <h2 className="text-2xl font-semibold mb-6">Choose Your Activity</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {activities.map((activity) => (
               <div
                 key={activity.id}
-                className={`activity-card glass-panel ${
+                className={`activity-card p-6 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer ${
                   selectedActivity === activity.id
-                    ? 'ring-2 ring-primary'
-                    : ''
+                    ? 'ring-2 ring-primary bg-primary/5'
+                    : 'bg-white'
                 }`}
                 onClick={() => setSelectedActivity(activity.id)}
               >
