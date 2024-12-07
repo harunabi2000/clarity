@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { MapPin, Clock, Navigation2 } from 'lucide-react';
+import { generateRoute } from '@/lib/route-utils';
+import { useToast } from '@/components/ui/use-toast';
 
 const activities = [
   {
@@ -31,6 +33,61 @@ const activities = [
 const Index = () => {
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
   const [duration, setDuration] = useState('30');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const { toast } = useToast();
+
+  const handleGenerateRoute = async () => {
+    if (!selectedActivity) {
+      toast({
+        title: "Select an activity",
+        description: "Please select an activity before generating a route",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      // Use browser's geolocation API to get current position
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const route = await generateRoute(
+              {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+              },
+              Number(duration),
+              selectedActivity
+            );
+            
+            toast({
+              title: "Route generated!",
+              description: "Your route has been successfully created.",
+            });
+            
+            // Here you would typically update state to show the route on a map
+            console.log('Generated route:', route);
+          } catch (error) {
+            toast({
+              title: "Error",
+              description: "Failed to generate route. Please try again.",
+              variant: "destructive",
+            });
+          }
+        },
+        (error) => {
+          toast({
+            title: "Location access denied",
+            description: "Please enable location access to generate routes",
+            variant: "destructive",
+          });
+        }
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   return (
     <div className="min-h-screen p-6 animate-fade-in">
@@ -89,9 +146,13 @@ const Index = () => {
                 <span className="text-gray-600">minutes</span>
               </div>
 
-              <button className="btn-primary w-full flex items-center justify-center space-x-2">
+              <button 
+                className="btn-primary w-full flex items-center justify-center space-x-2 bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleGenerateRoute}
+                disabled={isGenerating}
+              >
                 <Navigation2 className="w-5 h-5" />
-                <span>Generate Route</span>
+                <span>{isGenerating ? 'Generating...' : 'Generate Route'}</span>
               </button>
             </div>
           </section>
