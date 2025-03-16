@@ -1,5 +1,6 @@
+
 import { useState, useEffect } from 'react';
-import L from 'leaflet';
+import mapboxgl from 'mapbox-gl';
 
 interface LocationTrackingProps {
   steps: any[];
@@ -38,16 +39,25 @@ export const useLocationTracking = ({ steps, currentStepIndex, onStepComplete }:
         if (steps && steps[currentStepIndex]) {
           const currentStep = steps[currentStepIndex];
           const stepCoords = currentStep.maneuver.location;
-          const userLatLng = L.latLng(newLocation[0], newLocation[1]);
-          const stepLatLng = L.latLng(stepCoords[1], stepCoords[0]);
           
-          const distance = userLatLng.distanceTo(stepLatLng);
-          console.log('Distance to next step:', distance, 'meters');
-          
-          // If within 20 meters of the next step
-          if (distance < 20 && currentStepIndex < steps.length - 1) {
-            console.log('Step completed, moving to next step');
-            onStepComplete();
+          // Calculate distance using Mapbox's helper
+          if (mapboxgl.accessToken) {
+            const userCoords = { lon: newLocation[1], lat: newLocation[0] };
+            const stepLatLng = { lon: stepCoords[0], lat: stepCoords[1] };
+            
+            // Calculate distance in meters
+            const distance = calculateDistance(
+              userCoords.lat, userCoords.lon,
+              stepLatLng.lat, stepLatLng.lon
+            );
+            
+            console.log('Distance to next step:', distance, 'meters');
+            
+            // If within 20 meters of the next step
+            if (distance < 20 && currentStepIndex < steps.length - 1) {
+              console.log('Step completed, moving to next step');
+              onStepComplete();
+            }
           }
         }
       },
@@ -81,3 +91,19 @@ export const useLocationTracking = ({ steps, currentStepIndex, onStepComplete }:
 
   return userLocation;
 };
+
+// Helper function to calculate distance between coordinates
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // Earth radius in meters
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+          Math.cos(φ1) * Math.cos(φ2) *
+          Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c;
+}
