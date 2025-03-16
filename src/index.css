@@ -1,3 +1,6 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,22 +9,44 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
+
+  h1, h2, h3, h4, h5 {
+    @apply font-display;
+  }
 }
 
 @layer components {
   .glass-panel {
-    @apply backdrop-blur-md bg-white/80 shadow-lg;
+    @apply backdrop-blur-md bg-white/90 shadow-soft rounded-xl border border-white/20;
   }
   
   .activity-card {
-    @apply p-6 rounded-lg transition-all duration-300 hover:scale-105 cursor-pointer;
+    @apply p-6 rounded-xl shadow-card transition-all duration-300 hover:scale-105 hover:shadow-glow cursor-pointer overflow-hidden relative;
   }
   
   .input-field {
-    @apply px-4 py-3 rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all duration-200;
+    @apply px-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition-all duration-200 bg-white/80;
   }
   
   .btn-primary {
-    @apply px-6 py-3 bg-primary text-primary-foreground rounded-md hover:opacity-90 transition-all duration-200;
+    @apply px-6 py-3 bg-primary text-primary-foreground rounded-lg shadow-soft hover:shadow-glow transition-all duration-200 flex items-center justify-center gap-2;
+  }
+
+  .animated-bg {
+    @apply relative overflow-hidden;
+  }
+
+  .animated-bg::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-radial from-white/50 to-transparent opacity-70 animate-pulse-soft;
+  }
+
+  .decorated-heading {
+    @apply relative inline-block;
+  }
+
+  .decorated-heading::after {
+    content: '';
+    @apply absolute -bottom-2 left-0 h-1 bg-primary/70 rounded-full w-1/2;
   }
 }
