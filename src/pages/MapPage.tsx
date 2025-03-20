@@ -1,13 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Navigation } from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import { Locate } from 'lucide-react';
 
 export function MapPage() {
+  const navigate = useNavigate();
   const [origin, setOrigin] = useState<[number, number] | undefined>();
   const [destination, setDestination] = useState<[number, number] | undefined>();
   const { toast } = useToast();
+
+  useEffect(() => {
+    // Get user's location if they allow it
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setOrigin([position.coords.longitude, position.coords.latitude]);
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+        }
+      );
+    }
+  }, []);
 
   const handleLocationClick = () => {
     if ('geolocation' in navigator) {
@@ -38,6 +54,10 @@ export function MapPage() {
     console.log('Route updated:', route);
   };
 
+  const handleBack = () => {
+    navigate('/');
+  };
+
   return (
     <div className="relative w-full h-screen">
       <div className="absolute top-4 right-4 z-10 flex gap-2">
@@ -56,6 +76,7 @@ export function MapPage() {
         origin={origin}
         destination={destination}
         onRouteUpdate={handleRouteUpdate}
+        onBack={handleBack}
       />
 
       <div className="absolute bottom-4 left-4 right-4 z-10">
