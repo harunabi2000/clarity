@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
-import { generateLoopRoute, generateMindfulRoute } from '@/utils/routeUtils';
+import { calculateRoute } from '@/utils/routeUtils';
 import { LiveNavigation } from './LiveNavigation';
 
 mapboxgl.accessToken = config.mapbox.accessToken;
@@ -24,7 +24,14 @@ export function Navigation({ origin, onBack }: NavigationProps) {
   const [desiredDistance, setDesiredDistance] = useState(2); // in kilometers
   const [isGeneratingRoute, setIsGeneratingRoute] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
-  const [currentRoute, setCurrentRoute] = useState<GeoJSON.Feature | null>(null);
+  const [currentRoute, setCurrentRoute] = useState<{
+    type: 'Feature';
+    geometry: {
+      type: 'LineString';
+      coordinates: [number, number][];
+    };
+    properties: any;
+  } | null>(null);
 
   const generateRoute = async () => {
     if (!startLocation) {
@@ -43,17 +50,26 @@ export function Navigation({ origin, onBack }: NavigationProps) {
         throw new Error('Could not find start location');
       }
 
-      // Generate a mindful loop route
-      const route = await generateMindfulRoute(startCoords as [number, number], desiredDistance);
-      setCurrentRoute(route);
+      // Generate a route using Mapbox Directions API
+      const route = await calculateRoute(startCoords, startCoords);
+      setCurrentRoute({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: route.geometry.coordinates
+        },
+        properties: {
+          distance: route.distance,
+          duration: route.duration,
+          steps: route.legs[0].steps
+        }
+      });
 
       // Show waypoints in the toast
-      if (route.properties.waypoints) {
-        toast({
-          title: 'Route generated',
-          description: `Your route includes: ${route.properties.waypoints.map((wp: any) => wp.name).join(', ')}`,
-        });
-      }
+      toast({
+        title: 'Route generated',
+        description: `Route distance: ${(route.distance / 1000).toFixed(1)} km`,
+      });
 
     } catch (error) {
       console.error('Error generating route:', error);
@@ -77,7 +93,7 @@ export function Navigation({ origin, onBack }: NavigationProps) {
       );
       const data = await response.json();
       if (data.features && data.features.length > 0) {
-        return data.features[0].center;
+        return data.features[0].center as [number, number];
       }
     } catch (error) {
       console.error('Geocoding error:', error);

@@ -1,161 +1,242 @@
-import mapboxgl from 'mapbox-gl';
 import { config } from '@/config/env';
 
-interface RouteOptions {
-  startPoint: [number, number];
-  distance: number; // in kilometers
-  loops: number; // number of loops in the route
-}
-
-interface Waypoint {
-  type: string;
-  name: string;
-  address: string;
-}
-
-interface RouteProperties {
+// Types for route data
+export interface RouteStep {
+  maneuver: {
+    instruction: string;
+    location: [number, number];
+    bearing_before: number;
+    bearing_after: number;
+    type: string;
+  };
   distance: number;
   duration: number;
-  waypoints?: Waypoint[];
+  name: string;
 }
 
-interface RouteFeature {
-  type: 'Feature';
-  properties: RouteProperties;
+export interface RouteData {
   geometry: {
-    type: 'LineString';
     coordinates: [number, number][];
+    type: string;
   };
+  legs: {
+    steps: RouteStep[];
+    distance: number;
+    duration: number;
+  }[];
+  distance: number;
+  duration: number;
 }
 
-export async function generateLoopRoute({ startPoint, distance, loops = 1 }: RouteOptions): Promise<RouteFeature> {
-  const radiusInKm = distance / (2 * Math.PI); // Convert desired distance to radius
-  const points: [number, number][] = [];
-  
-  // Generate points in a circular pattern
-  for (let i = 0; i <= loops * 360; i += 45) {
-    const angle = (i * Math.PI) / 180;
-    const lat = startPoint[1] + (radiusInKm / 111) * Math.sin(angle);
-    const lon = startPoint[0] + (radiusInKm / (111 * Math.cos(startPoint[1] * Math.PI / 180))) * Math.cos(angle);
-    points.push([lon, lat]);
+export interface NavigationInstruction {
+  instruction: string;
+  distance: number;
+  isApproaching: boolean;
+  stepIndex: number;
+}
+
+// Cache for storing recently calculated routes
+const routeCache = new Map<string, { route: RouteData; timestamp: number }>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Calculate route using Mapbox Directions API
+ */
+export async function calculateRoute(
+  origin: [number, number],
+  destination: [number, number],
+  waypoints: [number, number][] = []
+): Promise<RouteData> {
+  // Create cache key
+  const cacheKey = JSON.stringify({ origin, destination, waypoints });
+  const cached = routeCache.get(cacheKey);
+
+  // Return cached route if valid
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached.route;
   }
 
-  // Add the start point at the end to close the loop
-  points.push(startPoint);
+  // Construct waypoints string
+  const waypointsStr = waypoints
+    .map(wp => `${wp[0]},${wp[1]}`)
+    .join(';');
 
-  // Get the optimized route through these points
+  // Build URL for Mapbox Directions API
+  const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${origin[0]},${origin[1]};${waypointsStr ? waypointsStr + ';' : ''}${destination[0]},${destination[1]}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${config.mapbox.accessToken}`;
+
   try {
-    const coordinates = points.map(point => point.join(',')).join(';');
-    const response = await fetch(
-      `https://api.mapbox.com/optimized-trips/v1/mapbox/walking/${coordinates}?roundtrip=true&source=first&destination=last&access_token=${config.mapbox.accessToken}`
-    );
-    
-    const data = await response.json();
-    
-    if (data.code !== 'Ok') {
-      throw new Error(data.message || 'Failed to generate route');
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Failed to fetch route');
     }
 
-    // Extract the waypoints in the optimized order
-    const optimizedPoints = data.waypoints
-      .sort((a: any, b: any) => a.waypoint_index - b.waypoint_index)
-      .map((wp: any) => wp.location);
-
-    return {
-      type: 'Feature',
-      properties: {
-        distance: data.trips[0].distance,
-        duration: data.trips[0].duration
-      },
-      geometry: {
-        type: 'LineString',
-        coordinates: optimizedPoints
-      }
-    };
-  } catch (error) {
-    console.error('Error generating loop route:', error);
-    throw error;
-  }
-}
-
-interface Park {
-  coordinates: [number, number];
-  name: string;
-  address: string;
-}
-
-export async function findNearbyParks(center: [number, number], radiusInKm: number = 1): Promise<Park[]> {
-  try {
-    const response = await fetch(
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/park.json?proximity=${center.join(',')}&radius=${radiusInKm * 1000}&access_token=${config.mapbox.accessToken}`
-    );
-    
     const data = await response.json();
-    return data.features.map((feature: any) => ({
-      coordinates: feature.center,
-      name: feature.text,
-      address: feature.place_name
-    }));
+    if (!data.routes || !data.routes[0]) {
+      throw new Error('No route found');
+    }
+
+    const route = data.routes[0];
+
+    // Cache the route
+    routeCache.set(cacheKey, {
+      route,
+      timestamp: Date.now()
+    });
+
+    return route;
   } catch (error) {
-    console.error('Error finding nearby parks:', error);
+    console.error('Error calculating route:', error);
     throw error;
   }
 }
 
-export async function generateMindfulRoute(startPoint: [number, number], desiredDistance: number): Promise<RouteFeature> {
-  // Find nearby parks and green spaces
-  const parks = await findNearbyParks(startPoint);
-  
-  if (parks.length === 0) {
-    // If no parks found, generate a standard loop
-    return generateLoopRoute({
-      startPoint,
-      distance: desiredDistance,
-      loops: 1
-    });
+/**
+ * Check if user is off route and needs rerouting
+ */
+export function isOffRoute(
+  userLocation: [number, number],
+  routeGeometry: [number, number][],
+  threshold: number = 50 // meters
+): boolean {
+  // Find the closest point on the route
+  let minDistance = Infinity;
+
+  for (let i = 0; i < routeGeometry.length - 1; i++) {
+    const start = routeGeometry[i];
+    const end = routeGeometry[i + 1];
+    const distance = getDistanceFromLine(userLocation, start, end);
+    minDistance = Math.min(minDistance, distance);
   }
 
-  // Use the closest park as a waypoint in our route
-  const closestPark = parks[0];
-  const points = [
-    startPoint,
-    closestPark.coordinates,
-    // Add more points to create a loop
-    [
-      startPoint[0] + (closestPark.coordinates[0] - startPoint[0]) / 2,
-      startPoint[1] + (closestPark.coordinates[1] - startPoint[1]) / 2
-    ] as [number, number],
-    startPoint
-  ];
+  // Convert to meters (rough approximation)
+  return minDistance * 111000 > threshold;
+}
 
-  // Get the optimized route through these points
-  const coordinates = points.map(point => point.join(',')).join(';');
-  const response = await fetch(
-    `https://api.mapbox.com/optimized-trips/v1/mapbox/walking/${coordinates}?roundtrip=true&source=first&destination=last&access_token=${config.mapbox.accessToken}`
-  );
-  
-  const data = await response.json();
-  
-  if (data.code !== 'Ok') {
-    throw new Error(data.message || 'Failed to generate mindful route');
+/**
+ * Get distance from point to line segment
+ */
+function getDistanceFromLine(
+  point: [number, number],
+  lineStart: [number, number],
+  lineEnd: [number, number]
+): number {
+  const A = point[0] - lineStart[0];
+  const B = point[1] - lineStart[1];
+  const C = lineEnd[0] - lineStart[0];
+  const D = lineEnd[1] - lineStart[1];
+
+  const dot = A * C + B * D;
+  const lenSq = C * C + D * D;
+  let param = -1;
+
+  if (lenSq !== 0) {
+    param = dot / lenSq;
   }
+
+  let xx, yy;
+
+  if (param < 0) {
+    xx = lineStart[0];
+    yy = lineStart[1];
+  } else if (param > 1) {
+    xx = lineEnd[0];
+    yy = lineEnd[1];
+  } else {
+    xx = lineStart[0] + param * C;
+    yy = lineStart[1] + param * D;
+  }
+
+  const dx = point[0] - xx;
+  const dy = point[1] - yy;
+
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Get the next navigation instruction based on current position
+ */
+export function getNextInstruction(
+  userLocation: [number, number],
+  userBearing: number,
+  steps: RouteStep[]
+): NavigationInstruction | null {
+  if (!steps.length) return null;
+
+  // Find the closest upcoming step
+  let closestStep = null;
+  let minDistance = Infinity;
+  let stepIndex = -1;
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const distance = getDistance(
+      userLocation,
+      step.maneuver.location
+    );
+
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestStep = step;
+      stepIndex = i;
+    }
+  }
+
+  if (!closestStep) return null;
+
+  // Convert distance to meters
+  const distanceInMeters = minDistance * 111000;
+  
+  // Determine if we're approaching the maneuver
+  const isApproaching = distanceInMeters < 100 && // Within 100 meters
+    Math.abs(userBearing - closestStep.maneuver.bearing_before) < 30; // Heading in the right direction
 
   return {
-    type: 'Feature',
-    properties: {
-      distance: data.trips[0].distance,
-      duration: data.trips[0].duration,
-      waypoints: [
-        {
-          type: 'park',
-          name: closestPark.name,
-          address: closestPark.address
-        }
-      ]
-    },
-    geometry: {
-      type: 'LineString',
-      coordinates: data.trips[0].geometry.coordinates
-    }
+    instruction: closestStep.maneuver.instruction,
+    distance: distanceInMeters,
+    isApproaching,
+    stepIndex
   };
+}
+
+/**
+ * Calculate distance between two points
+ */
+function getDistance(
+  point1: [number, number],
+  point2: [number, number]
+): number {
+  const dx = point2[0] - point1[0];
+  const dy = point2[1] - point1[1];
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Get bearing between two points
+ */
+export function getBearing(
+  start: [number, number],
+  end: [number, number]
+): number {
+  const startLat = toRad(start[1]);
+  const startLng = toRad(start[0]);
+  const endLat = toRad(end[1]);
+  const endLng = toRad(end[0]);
+
+  const dLng = endLng - startLng;
+
+  const y = Math.sin(dLng) * Math.cos(endLat);
+  const x = Math.cos(startLat) * Math.sin(endLat) -
+    Math.sin(startLat) * Math.cos(endLat) * Math.cos(dLng);
+
+  let bearing = toDeg(Math.atan2(y, x));
+  if (bearing < 0) bearing += 360;
+  return bearing;
+}
+
+function toRad(deg: number): number {
+  return deg * Math.PI / 180;
+}
+
+function toDeg(rad: number): number {
+  return rad * 180 / Math.PI;
 }

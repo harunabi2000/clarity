@@ -1,12 +1,21 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useRef, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import { config } from '@/config/env';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Volume2, VolumeX, Compass } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/components/ui/use-toast';
+import { useLocationStore } from '@/stores/locationStore';
+import { useNavigationStore } from '@/stores/navigationStore';
+import { initSpeech } from '@/utils/speechUtils';
 
 interface LiveNavigationProps {
-  route?: GeoJSON.Feature;
+  route: {
+    type: 'Feature';
+    geometry: {
+      type: 'LineString';
+      coordinates: [number, number][];
+    };
+    properties: any;
+  };
   onBack?: () => void;
 }
 
@@ -15,11 +24,29 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
   const map = useRef<mapboxgl.Map | null>(null);
   const userMarker = useRef<mapboxgl.Marker | null>(null);
   const routeLayer = useRef<string | null>(null);
-  const [userCoords, setUserCoords] = useState<[number, number] | null>(null);
-  const [currentStreet, setCurrentStreet] = useState<string>('');
-  const [nextInstruction, setNextInstruction] = useState<string>('');
-  const [distanceToNext, setDistanceToNext] = useState<string>('');
-  const { toast } = useToast();
+
+  // Get location state
+  const { 
+    coords, 
+    heading, 
+    speed, 
+    accuracy, 
+    startTracking, 
+    stopTracking 
+  } = useLocationStore();
+
+  // Get navigation state
+  const {
+    currentStep,
+    nextStep,
+    distanceToNextStep,
+    isRerouting,
+    voiceGuidance,
+    toggleVoiceGuidance,
+    startNavigation,
+    stopNavigation,
+    updateNavigation
+  } = useNavigationStore();
 
   // Initialize map
   useEffect(() => {
@@ -28,7 +55,7 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/navigation-night-v1',
-      center: userCoords || [-74.5, 40],
+      center: coords || [-74.5, 40],
       zoom: 15,
       pitch: 60
     });
@@ -39,100 +66,28 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
       'bottom-right'
     );
 
+    // Initialize speech synthesis
+    initSpeech();
+
     return () => {
       if (map.current) {
         map.current.remove();
         map.current = null;
       }
     };
-  }, [userCoords]);
+  }, []);
 
-  // Handle user location tracking
+  // Start navigation and location tracking
   useEffect(() => {
-    if (!map.current) return;
+    if (!route) return;
 
-    const handleSuccess = (position: GeolocationPosition) => {
-      const { latitude, longitude, heading, speed } = position.coords;
-      const newCoords: [number, number] = [longitude, latitude];
-      setUserCoords(newCoords);
+    startNavigation(route as any);
+    startTracking();
 
-      // Update or create user marker
-      if (!userMarker.current) {
-        const el = document.createElement('div');
-        el.className = 'user-marker';
-        el.style.width = '24px';
-        el.style.height = '24px';
-        el.style.borderRadius = '50%';
-        el.style.background = '#a855f7';
-        el.style.border = '3px solid white';
-        el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-
-        userMarker.current = new mapboxgl.Marker({
-          element: el,
-          rotationAlignment: 'map',
-          pitchAlignment: 'map'
-        })
-          .setLngLat(newCoords)
-          .addTo(map.current);
-      } else {
-        userMarker.current.setLngLat(newCoords);
-      }
-
-      // Rotate marker if heading is available
-      if (heading) {
-        userMarker.current.setRotation(heading);
-      }
-
-      // Update camera position and bearing
-      map.current.easeTo({
-        center: newCoords,
-        bearing: heading || 0,
-        pitch: 60,
-        duration: 1000
-      });
-
-      // Update street name
-      fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?access_token=${config.mapbox.accessToken}`
-      )
-        .then((res) => res.json())
-        .then((data) => {
-          const street = data.features.find((f: any) => 
-            f.place_type.includes('street') || f.place_type.includes('address')
-          );
-          if (street) {
-            setCurrentStreet(street.text);
-          }
-        })
-        .catch(console.error);
-
-      // If we have a route, check distance to next turn
-      if (route) {
-        // TODO: Calculate distance to next turn and update instructions
-      }
+    return () => {
+      stopNavigation();
+      stopTracking();
     };
-
-    const handleError = (error: GeolocationPositionError) => {
-      console.error("Geolocation error:", error);
-      toast({
-        title: "Location Error",
-        description: "Unable to get your location. Please check your GPS settings.",
-        variant: "destructive"
-      });
-    };
-
-    // Watch user position with high accuracy
-    const watchId = navigator.geolocation.watchPosition(
-      handleSuccess,
-      handleError,
-      {
-        enableHighAccuracy: true,
-        maximumAge: 1000,
-        timeout: 5000,
-      }
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
   }, [route]);
 
   // Draw route on map
@@ -179,6 +134,55 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
     });
   }, [route]);
 
+  // Update user marker and camera position
+  const updateUserPosition = useCallback((position: [number, number], heading: number | null) => {
+    if (!map.current) return;
+
+    // Create or update user marker
+    if (!userMarker.current) {
+      const el = document.createElement('div');
+      el.className = 'user-marker';
+      el.style.width = '24px';
+      el.style.height = '24px';
+      el.style.borderRadius = '50%';
+      el.style.background = '#a855f7';
+      el.style.border = '3px solid white';
+      el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+
+      userMarker.current = new mapboxgl.Marker({
+        element: el,
+        rotationAlignment: 'map',
+        pitchAlignment: 'map'
+      })
+        .setLngLat(position)
+        .addTo(map.current);
+    } else {
+      userMarker.current.setLngLat(position);
+    }
+
+    // Update marker rotation if heading is available
+    if (heading !== null) {
+      userMarker.current.setRotation(heading);
+    }
+
+    // Smooth camera transition
+    map.current.easeTo({
+      center: position,
+      bearing: heading || 0,
+      pitch: 60,
+      duration: 1000,
+      essential: true // This animation is considered essential for navigation
+    });
+  }, []);
+
+  // Update navigation when location changes
+  useEffect(() => {
+    if (coords && heading !== null) {
+      updateUserPosition(coords, heading);
+      updateNavigation(coords, heading);
+    }
+  }, [coords, heading, updateNavigation, updateUserPosition]);
+
   return (
     <div className="h-screen relative">
       {/* Navigation Header */}
@@ -193,18 +197,45 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
             <ChevronLeft className="h-6 w-6" />
           </Button>
           <div className="flex-1">
-            <h2 className="text-lg font-semibold">{currentStreet || 'Finding location...'}</h2>
-            {nextInstruction && (
+            <h2 className="text-lg font-semibold">
+              {currentStep?.name || 'Finding location...'}
+              {isRerouting && ' (Rerouting...)'}
+            </h2>
+            {nextStep && distanceToNextStep && (
               <p className="text-sm opacity-80">
-                {nextInstruction} • {distanceToNext}
+                {nextStep.maneuver.instruction} • {(distanceToNextStep / 1000).toFixed(1)} km
               </p>
             )}
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white hover:bg-purple-700"
+            onClick={toggleVoiceGuidance}
+          >
+            {voiceGuidance ? (
+              <Volume2 className="h-6 w-6" />
+            ) : (
+              <VolumeX className="h-6 w-6" />
+            )}
+          </Button>
         </div>
       </div>
 
       {/* Map Container */}
       <div ref={mapContainer} className="w-full h-full" />
+
+      {/* Speed and Accuracy Indicator */}
+      {speed !== null && accuracy !== null && (
+        <div className="absolute bottom-20 right-4 z-10 bg-background/90 backdrop-blur p-2 rounded-lg text-sm space-y-1">
+          <div className="flex items-center gap-2">
+            <Compass className="h-4 w-4" />
+            <span>{heading !== null ? `${Math.round(heading)}°` : 'N/A'}</span>
+          </div>
+          <div>Speed: {(speed * 3.6).toFixed(1)} km/h</div>
+          <div>Accuracy: ±{accuracy.toFixed(0)}m</div>
+        </div>
+      )}
     </div>
   );
 }
