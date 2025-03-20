@@ -1,23 +1,22 @@
 import React from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
+import ReactDOM from 'react-dom/client';
+import App from './App';
 import './index.css';
+import { registerSW } from 'virtual:pwa-register';
 
 // Register service worker
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/service-worker.js')
-      .then((registration) => {
-        console.log('ServiceWorker registration successful');
-      })
-      .catch((err) => {
-        console.log('ServiceWorker registration failed: ', err);
-      });
+  registerSW({
+    onNeedRefresh() {
+      // Handle PWA update if needed
+    },
+    onOfflineReady() {
+      console.log('App ready to work offline');
+    },
   });
 }
 
-createRoot(document.getElementById("root")!).render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
