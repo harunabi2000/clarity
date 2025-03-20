@@ -1,6 +1,17 @@
 import { config } from '@/config/env';
 
-// Types for route data
+interface RouteOptions {
+  startPoint: [number, number];
+  distance: number;
+  loops?: number;
+}
+
+interface RouteProperties {
+  distance: number;
+  duration: number;
+  steps: RouteStep[];
+}
+
 export interface RouteStep {
   maneuver: {
     instruction: string;
@@ -15,17 +26,27 @@ export interface RouteStep {
 }
 
 export interface RouteData {
-  geometry: {
-    coordinates: [number, number][];
-    type: string;
-  };
-  legs: {
-    steps: RouteStep[];
+  type: 'Feature';
+  properties: {
     distance: number;
     duration: number;
-  }[];
-  distance: number;
-  duration: number;
+    steps: {
+      maneuver: {
+        instruction: string;
+        location: [number, number];
+        bearing_before: number;
+        bearing_after: number;
+        type: string;
+      };
+      distance: number;
+      duration: number;
+      name: string;
+    }[];
+  };
+  geometry: {
+    type: string;
+    coordinates: [number, number][];
+  };
 }
 
 export interface NavigationInstruction {
@@ -35,208 +56,215 @@ export interface NavigationInstruction {
   stepIndex: number;
 }
 
+interface Location {
+  latitude: number;
+  longitude: number;
+}
+
+interface RoutePoint {
+  latitude: number;
+  longitude: number;
+}
+
 // Cache for storing recently calculated routes
 const routeCache = new Map<string, { route: RouteData; timestamp: number }>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Calculate route using Mapbox Directions API
- */
-export async function calculateRoute(
-  origin: [number, number],
-  destination: [number, number],
-  waypoints: [number, number][] = []
-): Promise<RouteData> {
-  // Create cache key
-  const cacheKey = JSON.stringify({ origin, destination, waypoints });
-  const cached = routeCache.get(cacheKey);
-
-  // Return cached route if valid
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-    return cached.route;
-  }
-
-  // Construct waypoints string
-  const waypointsStr = waypoints
-    .map(wp => `${wp[0]},${wp[1]}`)
-    .join(';');
-
-  // Build URL for Mapbox Directions API
-  const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${origin[0]},${origin[1]};${waypointsStr ? waypointsStr + ';' : ''}${destination[0]},${destination[1]}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${config.mapbox.accessToken}`;
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error('Failed to fetch route');
-    }
-
-    const data = await response.json();
-    if (!data.routes || !data.routes[0]) {
-      throw new Error('No route found');
-    }
-
-    const route = data.routes[0];
-
-    // Cache the route
-    routeCache.set(cacheKey, {
-      route,
-      timestamp: Date.now()
-    });
-
-    return route;
-  } catch (error) {
-    console.error('Error calculating route:', error);
-    throw error;
-  }
+// Convert degrees to radians
+function toRad(deg: number): number {
+  return deg * (Math.PI / 180);
 }
 
-/**
- * Check if user is off route and needs rerouting
- */
-export function isOffRoute(
-  userLocation: [number, number],
-  routeGeometry: [number, number][],
-  threshold: number = 50 // meters
-): boolean {
-  // Find the closest point on the route
-  let minDistance = Infinity;
-
-  for (let i = 0; i < routeGeometry.length - 1; i++) {
-    const start = routeGeometry[i];
-    const end = routeGeometry[i + 1];
-    const distance = getDistanceFromLine(userLocation, start, end);
-    minDistance = Math.min(minDistance, distance);
-  }
-
-  // Convert to meters (rough approximation)
-  return minDistance * 111000 > threshold;
+// Convert radians to degrees
+function toDeg(rad: number): number {
+  return rad * (180 / Math.PI);
 }
 
-/**
- * Get distance from point to line segment
- */
-function getDistanceFromLine(
-  point: [number, number],
-  lineStart: [number, number],
-  lineEnd: [number, number]
+// Calculate distance between two points in meters
+export function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
 ): number {
-  const A = point[0] - lineStart[0];
-  const B = point[1] - lineStart[1];
-  const C = lineEnd[0] - lineStart[0];
-  const D = lineEnd[1] - lineStart[1];
+  const R = 6371e3; // Earth's radius in meters
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δφ = toRad(lat2 - lat1);
+  const Δλ = toRad(lon2 - lon1);
 
-  const dot = A * C + B * D;
-  const lenSq = C * C + D * D;
-  let param = -1;
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
 
-  if (lenSq !== 0) {
-    param = dot / lenSq;
-  }
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  let xx, yy;
-
-  if (param < 0) {
-    xx = lineStart[0];
-    yy = lineStart[1];
-  } else if (param > 1) {
-    xx = lineEnd[0];
-    yy = lineEnd[1];
-  } else {
-    xx = lineStart[0] + param * C;
-    yy = lineStart[1] + param * D;
-  }
-
-  const dx = point[0] - xx;
-  const dy = point[1] - yy;
-
-  return Math.sqrt(dx * dx + dy * dy);
+  return R * c;
 }
 
-/**
- * Get the next navigation instruction based on current position
- */
-export function getNextInstruction(
-  userLocation: [number, number],
-  userBearing: number,
-  steps: RouteStep[]
-): NavigationInstruction | null {
-  if (!steps.length) return null;
-
-  // Find the closest upcoming step
-  let closestStep = null;
-  let minDistance = Infinity;
-  let stepIndex = -1;
-
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    const distance = getDistance(
-      userLocation,
-      step.maneuver.location
-    );
-
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestStep = step;
-      stepIndex = i;
-    }
-  }
-
-  if (!closestStep) return null;
-
-  // Convert distance to meters
-  const distanceInMeters = minDistance * 111000;
-  
-  // Determine if we're approaching the maneuver
-  const isApproaching = distanceInMeters < 100 && // Within 100 meters
-    Math.abs(userBearing - closestStep.maneuver.bearing_before) < 30; // Heading in the right direction
-
-  return {
-    instruction: closestStep.maneuver.instruction,
-    distance: distanceInMeters,
-    isApproaching,
-    stepIndex
-  };
-}
-
-/**
- * Calculate distance between two points
- */
-function getDistance(
-  point1: [number, number],
-  point2: [number, number]
+// Calculate bearing between two points in degrees
+export function calculateBearing(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
 ): number {
-  const dx = point2[0] - point1[0];
-  const dy = point2[1] - point1[1];
-  return Math.sqrt(dx * dx + dy * dy);
-}
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const λ1 = toRad(lon1);
+  const λ2 = toRad(lon2);
 
-/**
- * Get bearing between two points
- */
-export function getBearing(
-  start: [number, number],
-  end: [number, number]
-): number {
-  const startLat = toRad(start[1]);
-  const startLng = toRad(start[0]);
-  const endLat = toRad(end[1]);
-  const endLng = toRad(end[0]);
+  const y = Math.sin(λ2 - λ1) * Math.cos(φ2);
+  const x =
+    Math.cos(φ1) * Math.sin(φ2) -
+    Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
 
-  const dLng = endLng - startLng;
+  const θ = Math.atan2(y, x);
+  const bearing = (toDeg(θ) + 360) % 360;
 
-  const y = Math.sin(dLng) * Math.cos(endLat);
-  const x = Math.cos(startLat) * Math.sin(endLat) -
-    Math.sin(startLat) * Math.cos(endLat) * Math.cos(dLng);
-
-  let bearing = toDeg(Math.atan2(y, x));
-  if (bearing < 0) bearing += 360;
   return bearing;
 }
 
-function toRad(deg: number): number {
-  return deg * Math.PI / 180;
+// Check if user is off route
+export function isOffRoute(
+  userLocation: [number, number],
+  routeCoordinates: [number, number][]
+): boolean {
+  // Find the closest point on the route
+  let minDistance = Infinity;
+  for (const coord of routeCoordinates) {
+    const distance = calculateDistance(
+      userLocation[1],
+      userLocation[0],
+      coord[1],
+      coord[0]
+    );
+    minDistance = Math.min(minDistance, distance);
+  }
+
+  // If user is more than 50 meters from route, consider them off route
+  return minDistance > 50;
 }
 
-function toDeg(rad: number): number {
-  return rad * 180 / Math.PI;
+// Get next navigation instruction based on user location
+export function getNextInstruction(
+  userLocation: [number, number],
+  userBearing: number,
+  steps: {
+    maneuver: {
+      instruction: string;
+      location: [number, number];
+      bearing_before: number;
+      bearing_after: number;
+      type: string;
+    };
+    distance: number;
+    duration: number;
+    name: string;
+  }[]
+): {
+  instruction: string;
+  distance: number;
+  isApproaching: boolean;
+  name: string;
+} | null {
+  // Find the next maneuver
+  for (const step of steps) {
+    const distance = calculateDistance(
+      userLocation[1],
+      userLocation[0],
+      step.maneuver.location[1],
+      step.maneuver.location[0]
+    );
+
+    // If we're within 100 meters of the maneuver
+    if (distance < 100) {
+      return {
+        instruction: step.maneuver.instruction,
+        distance,
+        isApproaching: distance < 50,
+        name: step.name || 'Unknown road'
+      };
+    }
+  }
+
+  return null;
+}
+
+// Calculate route using Mapbox Directions API
+export async function calculateRoute(
+  start: [number, number],
+  end: [number, number]
+): Promise<{
+  geometry: {
+    coordinates: [number, number][];
+    type: string;
+  };
+  legs: {
+    steps: {
+      maneuver: {
+        instruction: string;
+        location: [number, number];
+        bearing_before: number;
+        bearing_after: number;
+        type: string;
+      };
+      distance: number;
+      duration: number;
+      name: string;
+    }[];
+  }[];
+  distance: number;
+  duration: number;
+}> {
+  const response = await fetch(
+    `https://api.mapbox.com/directions/v5/mapbox/walking/${start[0]},${start[1]};${end[0]},${end[1]}?geometries=geojson&overview=full&steps=true&access_token=${config.mapbox.accessToken}`
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to calculate route');
+  }
+
+  const data = await response.json();
+
+  if (!data.routes || !data.routes[0]) {
+    throw new Error('No route found');
+  }
+
+  return data.routes[0];
+}
+
+export async function generateLoopRoute(startLocation: Location, durationMinutes: number): Promise<RoutePoint[]> {
+  try {
+    // Average walking speed is 5 km/h
+    const speedKmH = 5;
+    
+    // Calculate the desired distance based on duration and speed
+    const distanceKm = (speedKmH * durationMinutes / 60) / 2; // Divide by 2 since it's a loop
+    
+    // Generate points in a circular pattern
+    const numPoints = 8; // Number of points to generate
+    const points: RoutePoint[] = [];
+    
+    for (let i = 0; i <= numPoints; i++) {
+      const angle = (i * 2 * Math.PI) / numPoints;
+      
+      // Calculate offset from center point
+      const lat = startLocation.latitude + (distanceKm / 6371) * (180 / Math.PI) * Math.cos(angle);
+      const lon = startLocation.longitude + (distanceKm / 6371) * (180 / Math.PI) * Math.sin(angle) / Math.cos(startLocation.latitude * Math.PI / 180);
+      
+      points.push({
+        latitude: lat,
+        longitude: lon
+      });
+    }
+    
+    // Add start point at the end to close the loop
+    points.push(points[0]);
+    
+    return points;
+  } catch (error) {
+    console.error('Error generating route:', error);
+    throw error;
+  }
 }

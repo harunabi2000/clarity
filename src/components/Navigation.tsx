@@ -1,243 +1,173 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
-import '@mapbox/mapbox-gl-directions/dist/mapbox-gl-directions.css';
 import { useToast } from '@/components/ui/use-toast';
-import { config } from '@/config/env';
-import { ChevronLeft, Search, Navigation as NavIcon, RefreshCw, MapPin, Crosshair } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Slider } from '@/components/ui/slider';
-import { calculateRoute } from '@/utils/routeUtils';
-import { LiveNavigation } from './LiveNavigation';
+import { config } from '@/config/env';
+import { Search, Navigation as NavIcon, MapPin } from 'lucide-react';
+import { generateLoopRoute } from '@/utils/routeUtils';
 import { useLocationStore } from '@/stores/locationStore';
-import { LocationSearch, Location } from './LocationSearch';
 
 mapboxgl.accessToken = config.mapbox.accessToken;
 
-interface NavigationProps {
-  onBack?: () => void;
-}
-
-export function Navigation({ onBack }: NavigationProps) {
+export function Navigation() {
   const { toast } = useToast();
-  const { coords: currentLocation, startTracking } = useLocationStore();
-  const [startLocation, setStartLocation] = useState<Location | null>(null);
-  const [endLocation, setEndLocation] = useState<Location | null>(null);
-  const [isGeneratingRoute, setIsGeneratingRoute] = useState(false);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [currentRoute, setCurrentRoute] = useState<{
-    type: 'Feature';
-    geometry: {
-      type: 'LineString';
-      coordinates: [number, number][];
-    };
-    properties: {
-      distance: number;
-      duration: number;
-      steps: {
-        maneuver: {
-          instruction: string;
-          location: [number, number];
-          bearing_before: number;
-          bearing_after: number;
-          type: string;
-        };
-        distance: number;
-        duration: number;
-        name: string;
-      }[];
-    };
-  } | null>(null);
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const map = useRef<mapboxgl.Map | null>(null);
+  const [duration, setDuration] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [route, setRoute] = useState<any>(null);
+  const { currentLocation } = useLocationStore();
 
-  // Start location tracking when component mounts
   useEffect(() => {
-    startTracking();
-  }, [startTracking]);
+    if (!mapContainer.current) return;
 
-  const generateRoute = async () => {
-    if (!startLocation && !currentLocation) {
+    map.current = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [currentLocation?.longitude || -0.1278, currentLocation?.latitude || 51.5074],
+      zoom: 13,
+    });
+
+    // Add user location marker
+    if (currentLocation) {
+      new mapboxgl.Marker()
+        .setLngLat([currentLocation.longitude, currentLocation.latitude])
+        .addTo(map.current);
+    }
+
+    return () => {
+      map.current?.remove();
+    };
+  }, [currentLocation]);
+
+  const handleGenerateRoute = async () => {
+    if (!currentLocation) {
       toast({
-        title: 'No start location',
-        description: 'Please enter a start location or allow location access',
-        variant: 'destructive',
+        title: "Error",
+        description: "Please enable location services",
+        variant: "destructive",
       });
       return;
     }
 
-    if (!endLocation) {
+    if (!duration || isNaN(Number(duration)) || Number(duration) <= 0) {
       toast({
-        title: 'No destination',
-        description: 'Please enter a destination',
-        variant: 'destructive',
+        title: "Error",
+        description: "Please enter a valid duration in minutes",
+        variant: "destructive",
       });
       return;
     }
 
-    setIsGeneratingRoute(true);
+    setLoading(true);
     try {
-      // Use coordinates from selected locations
-      const startCoords = startLocation 
-        ? startLocation.coordinates
-        : currentLocation;
+      const waypoints = await generateLoopRoute(currentLocation, Number(duration));
+      setRoute(waypoints);
 
-      if (!startCoords) {
-        throw new Error('Could not determine start location');
+      // Add route to map
+      if (map.current) {
+        if (map.current.getSource('route')) {
+          (map.current.getSource('route') as mapboxgl.GeoJSONSource).setData({
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: waypoints.map((point: any) => [point.longitude, point.latitude])
+            }
+          });
+        } else {
+          map.current.addSource('route', {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: waypoints.map((point: any) => [point.longitude, point.latitude])
+              }
+            }
+          });
+
+          map.current.addLayer({
+            id: 'route',
+            type: 'line',
+            source: 'route',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round'
+            },
+            paint: {
+              'line-color': '#3498db',
+              'line-width': 4
+            }
+          });
+        }
+
+        // Fit map to route bounds
+        const coordinates = waypoints.map((point: any) => [point.longitude, point.latitude]);
+        const bounds = coordinates.reduce((bounds: mapboxgl.LngLatBounds, coord: number[]) => {
+          return bounds.extend(coord as mapboxgl.LngLatLike);
+        }, new mapboxgl.LngLatBounds(coordinates[0], coordinates[0]));
+
+        map.current.fitBounds(bounds, {
+          padding: 50
+        });
       }
 
-      const route = await calculateRoute(startCoords, endLocation.coordinates);
-      
-      setCurrentRoute({
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: route.geometry.coordinates
-        },
-        properties: {
-          distance: route.distance,
-          duration: route.duration,
-          steps: route.legs[0].steps
-        }
-      });
-
       toast({
-        title: 'Route generated',
-        description: `Distance: ${(route.distance / 1000).toFixed(1)} km • Duration: ${Math.round(route.duration / 60)} min`,
+        title: "Success",
+        description: "Route generated successfully",
       });
-
     } catch (error) {
       console.error('Error generating route:', error);
       toast({
-        title: 'Error generating route',
-        description: error instanceof Error ? error.message : 'Please try different locations',
-        variant: 'destructive',
+        title: "Error",
+        description: "Failed to generate route. Please try again.",
+        variant: "destructive",
       });
     } finally {
-      setIsGeneratingRoute(false);
+      setLoading(false);
     }
   };
-
-  const useCurrentLocation = () => {
-    if (!currentLocation) {
-      toast({
-        title: 'Location not available',
-        description: 'Please enable location services or enter an address',
-        variant: 'destructive',
-      });
-      return;
-    }
-    setStartLocation(null);
-  };
-
-  const startNavigation = () => {
-    if (!currentRoute) {
-      toast({
-        title: 'No route selected',
-        description: 'Please generate a route first',
-        variant: 'destructive',
-      });
-      return;
-    }
-    setIsNavigating(true);
-  };
-
-  if (isNavigating && currentRoute) {
-    return (
-      <LiveNavigation
-        route={currentRoute}
-        onBack={() => setIsNavigating(false)}
-      />
-    );
-  }
 
   return (
     <div className="h-screen relative">
-      {/* Navigation Header */}
-      <div className="absolute top-0 left-0 right-0 z-10 bg-purple-600 text-white p-4 shadow-lg">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-white hover:bg-purple-700"
-            onClick={onBack}
-          >
-            <ChevronLeft className="h-6 w-6" />
-          </Button>
-          <div className="flex-1">
-            <h2 className="text-lg font-semibold">Navigation</h2>
-            <p className="text-sm opacity-80">
-              Enter your destination to start
-            </p>
-          </div>
-        </div>
-      </div>
+      <div ref={mapContainer} className="w-full h-full" />
 
-      {/* Route Generator */}
-      <Card className="absolute top-20 left-4 right-4 z-10 p-4 bg-background/95 backdrop-blur shadow-lg">
+      <Card className="absolute bottom-0 left-0 right-0 p-6 rounded-t-3xl bg-white/95 backdrop-blur-sm shadow-lg">
         <div className="space-y-4">
-          {/* Start Location */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Start Location</label>
-            <div className="flex items-center gap-2">
-              <LocationSearch
-                placeholder={currentLocation ? "Using current location" : "Enter start location"}
-                onLocationSelect={setStartLocation}
-                initialValue={startLocation?.place_name || ''}
-                className="flex-1"
-              />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={useCurrentLocation}
-                disabled={!currentLocation || isGeneratingRoute}
-                title="Use current location"
-              >
-                <Crosshair className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          {/* End Location */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Destination</label>
-            <LocationSearch
-              placeholder="Enter destination"
-              onLocationSelect={setEndLocation}
-              initialValue={endLocation?.place_name || ''}
-              className="flex-1"
+          <div className="flex items-center gap-3 bg-gray-100 rounded-xl p-4">
+            <MapPin className="text-[#3498db]" />
+            <Input
+              type="number"
+              placeholder="Duration (minutes)"
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              className="border-none bg-transparent text-lg placeholder:text-gray-500"
             />
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-2">
-            <Button
-              className="flex-1"
-              onClick={generateRoute}
-              disabled={isGeneratingRoute}
-            >
-              {isGeneratingRoute ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Search className="h-4 w-4 mr-2" />
-              )}
-              Get Directions
-            </Button>
-            {currentRoute && (
-              <Button
-                variant="secondary"
-                className="flex-1"
-                onClick={startNavigation}
-              >
-                <NavIcon className="h-4 w-4 mr-2" />
-                Start Navigation
-              </Button>
+          <Button
+            onClick={handleGenerateRoute}
+            disabled={loading}
+            className="w-full py-6 text-lg bg-[#3498db] hover:bg-[#2980b9] transition-colors duration-200"
+          >
+            {loading ? (
+              <div className="flex items-center gap-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Generating...
+              </div>
+            ) : (
+              <>
+                <NavIcon className="mr-2" />
+                Generate Route
+              </>
             )}
-          </div>
+          </Button>
         </div>
       </Card>
-
-      {/* Map Preview */}
-      <div id="map" className="w-full h-full" />
     </div>
   );
 }

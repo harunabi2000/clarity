@@ -1,8 +1,8 @@
 export const config = {
   mapbox: {
-    accessToken: process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || '',
+    accessToken: import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '',
   },
   openWeather: {
-    apiKey: process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY || '',
+    apiKey: import.meta.env.VITE_OPENWEATHER_API_KEY || '',
   }
 } as const;

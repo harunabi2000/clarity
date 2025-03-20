@@ -7,7 +7,6 @@ import path from 'path';
 export default defineConfig(({ mode }) => ({
   server: {
     host: true, // This enables network access
-    port: 8080,
   },
   plugins: [
     react(),
