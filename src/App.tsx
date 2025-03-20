@@ -6,6 +6,7 @@ import Index from "./pages/Index";
 import { MapPage } from './pages/MapPage';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { InstallPWA } from '@/components/InstallPWA';
 import './App.css';
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
               <Route path="/map" element={<MapPage />} />
             </Routes>
           </BrowserRouter>
+          <InstallPWA />
         </div>
       </TooltipProvider>
     </ThemeProvider>
