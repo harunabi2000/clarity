@@ -1,0 +1,14 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "VITE_MAPBOX_TOKEN": "pk.eyJ1IjoiaGFydW5hYmkyMDAwIiwiYSI6ImNtOGJ2cGl1NDBzem0yaXM1eDdhamlyeGoifQ.LYuUqmB0ImZKd8Um-uCM1g"
+  }
+}
