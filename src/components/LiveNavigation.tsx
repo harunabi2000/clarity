@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import { config } from '@/config/env';
-import { ChevronLeft, Volume2, VolumeX, Compass } from 'lucide-react';
+import { ChevronLeft, Volume2, VolumeX, Compass, Cloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLocationStore } from '@/stores/locationStore';
 import { useNavigationStore } from '@/stores/navigationStore';
+import { useWeatherStore } from '@/utils/weatherUtils';
 import { initSpeech } from '@/utils/speechUtils';
 
 interface LiveNavigationProps {
@@ -14,7 +15,22 @@ interface LiveNavigationProps {
       type: 'LineString';
       coordinates: [number, number][];
     };
-    properties: any;
+    properties: {
+      distance: number;
+      duration: number;
+      steps: {
+        maneuver: {
+          instruction: string;
+          location: [number, number];
+          bearing_before: number;
+          bearing_after: number;
+          type: string;
+        };
+        distance: number;
+        duration: number;
+        name: string;
+      }[];
+    };
   };
   onBack?: () => void;
 }
@@ -32,7 +48,8 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
     speed, 
     accuracy, 
     startTracking, 
-    stopTracking 
+    stopTracking,
+    error: locationError
   } = useLocationStore();
 
   // Get navigation state
@@ -45,8 +62,12 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
     toggleVoiceGuidance,
     startNavigation,
     stopNavigation,
-    updateNavigation
+    updateNavigation,
+    error: navigationError
   } = useNavigationStore();
+
+  // Get weather state
+  const { data: weather, updateWeather } = useWeatherStore();
 
   // Initialize map
   useEffect(() => {
@@ -81,7 +102,7 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
   useEffect(() => {
     if (!route) return;
 
-    startNavigation(route as any);
+    startNavigation(route);
     startTracking();
 
     return () => {
@@ -175,13 +196,24 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
     });
   }, []);
 
-  // Update navigation when location changes
+  // Update navigation and weather when location changes
   useEffect(() => {
     if (coords && heading !== null) {
       updateUserPosition(coords, heading);
       updateNavigation(coords, heading);
+      updateWeather(coords);
     }
-  }, [coords, heading, updateNavigation, updateUserPosition]);
+  }, [coords, heading, updateNavigation, updateUserPosition, updateWeather]);
+
+  // Format duration for display
+  const formatDuration = (minutes: number): string => {
+    if (minutes < 60) {
+      return `${Math.round(minutes)} min`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = Math.round(minutes % 60);
+    return `${hours}h ${remainingMinutes}m`;
+  };
 
   return (
     <div className="h-screen relative">
@@ -206,6 +238,11 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
                 {nextStep.maneuver.instruction} • {(distanceToNextStep / 1000).toFixed(1)} km
               </p>
             )}
+            {route && (
+              <p className="text-xs opacity-60">
+                Total: {(route.properties.distance / 1000).toFixed(1)} km • {formatDuration(route.properties.duration / 60)}
+              </p>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -225,17 +262,38 @@ export function LiveNavigation({ route, onBack }: LiveNavigationProps) {
       {/* Map Container */}
       <div ref={mapContainer} className="w-full h-full" />
 
-      {/* Speed and Accuracy Indicator */}
-      {speed !== null && accuracy !== null && (
-        <div className="absolute bottom-20 right-4 z-10 bg-background/90 backdrop-blur p-2 rounded-lg text-sm space-y-1">
+      {/* Speed, Weather, and Accuracy Indicator */}
+      <div className="absolute bottom-20 right-4 z-10 bg-background/90 backdrop-blur p-4 rounded-lg text-sm space-y-3">
+        {/* Navigation Info */}
+        <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Compass className="h-4 w-4" />
             <span>{heading !== null ? `${Math.round(heading)}°` : 'N/A'}</span>
           </div>
-          <div>Speed: {(speed * 3.6).toFixed(1)} km/h</div>
-          <div>Accuracy: ±{accuracy.toFixed(0)}m</div>
+          <div>Speed: {speed !== null ? `${(speed * 3.6).toFixed(1)} km/h` : 'N/A'}</div>
+          <div>Accuracy: {accuracy !== null ? `±${accuracy.toFixed(0)}m` : 'N/A'}</div>
         </div>
-      )}
+
+        {/* Weather Info */}
+        {weather && (
+          <div className="border-t pt-2 space-y-1">
+            <div className="flex items-center gap-2">
+              <Cloud className="h-4 w-4" />
+              <span>{weather.temperature}°C • {weather.description}</span>
+            </div>
+            <div>Wind: {weather.windSpeed} km/h</div>
+            <div>Feels like: {weather.feelsLike}°C</div>
+          </div>
+        )}
+
+        {/* Error Messages */}
+        {(locationError || navigationError) && (
+          <div className="border-t pt-2 text-red-500">
+            {locationError && <div>{locationError}</div>}
+            {navigationError && <div>{navigationError}</div>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

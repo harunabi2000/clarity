@@ -3,25 +3,27 @@ import mapboxgl from 'mapbox-gl';
 import '@mapbox/mapbox-gl-directions/dist/mapbox-gl-directions.css';
 import { useToast } from '@/components/ui/use-toast';
 import { config } from '@/config/env';
-import { ChevronLeft, Search, Navigation as NavIcon, RefreshCw, MapPin } from 'lucide-react';
+import { ChevronLeft, Search, Navigation as NavIcon, RefreshCw, MapPin, Crosshair } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { calculateRoute } from '@/utils/routeUtils';
 import { LiveNavigation } from './LiveNavigation';
+import { useLocationStore } from '@/stores/locationStore';
+import { LocationSearch, Location } from './LocationSearch';
 
 mapboxgl.accessToken = config.mapbox.accessToken;
 
 interface NavigationProps {
-  origin?: [number, number];
   onBack?: () => void;
 }
 
-export function Navigation({ origin, onBack }: NavigationProps) {
+export function Navigation({ onBack }: NavigationProps) {
   const { toast } = useToast();
-  const [startLocation, setStartLocation] = useState('');
-  const [desiredDistance, setDesiredDistance] = useState(2); // in kilometers
+  const { coords: currentLocation, startTracking } = useLocationStore();
+  const [startLocation, setStartLocation] = useState<Location | null>(null);
+  const [endLocation, setEndLocation] = useState<Location | null>(null);
   const [isGeneratingRoute, setIsGeneratingRoute] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [currentRoute, setCurrentRoute] = useState<{
@@ -30,14 +32,43 @@ export function Navigation({ origin, onBack }: NavigationProps) {
       type: 'LineString';
       coordinates: [number, number][];
     };
-    properties: any;
+    properties: {
+      distance: number;
+      duration: number;
+      steps: {
+        maneuver: {
+          instruction: string;
+          location: [number, number];
+          bearing_before: number;
+          bearing_after: number;
+          type: string;
+        };
+        distance: number;
+        duration: number;
+        name: string;
+      }[];
+    };
   } | null>(null);
 
+  // Start location tracking when component mounts
+  useEffect(() => {
+    startTracking();
+  }, [startTracking]);
+
   const generateRoute = async () => {
-    if (!startLocation) {
+    if (!startLocation && !currentLocation) {
       toast({
-        title: 'Please enter a start location',
-        description: 'Start location is required to generate a route',
+        title: 'No start location',
+        description: 'Please enter a start location or allow location access',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!endLocation) {
+      toast({
+        title: 'No destination',
+        description: 'Please enter a destination',
         variant: 'destructive',
       });
       return;
@@ -45,13 +76,17 @@ export function Navigation({ origin, onBack }: NavigationProps) {
 
     setIsGeneratingRoute(true);
     try {
-      const startCoords = await geocodeLocation(startLocation);
+      // Use coordinates from selected locations
+      const startCoords = startLocation 
+        ? startLocation.coordinates
+        : currentLocation;
+
       if (!startCoords) {
-        throw new Error('Could not find start location');
+        throw new Error('Could not determine start location');
       }
 
-      // Generate a route using Mapbox Directions API
-      const route = await calculateRoute(startCoords, startCoords);
+      const route = await calculateRoute(startCoords, endLocation.coordinates);
+      
       setCurrentRoute({
         type: 'Feature',
         geometry: {
@@ -65,17 +100,16 @@ export function Navigation({ origin, onBack }: NavigationProps) {
         }
       });
 
-      // Show waypoints in the toast
       toast({
         title: 'Route generated',
-        description: `Route distance: ${(route.distance / 1000).toFixed(1)} km`,
+        description: `Distance: ${(route.distance / 1000).toFixed(1)} km • Duration: ${Math.round(route.duration / 60)} min`,
       });
 
     } catch (error) {
       console.error('Error generating route:', error);
       toast({
         title: 'Error generating route',
-        description: 'Please try a different location or distance',
+        description: error instanceof Error ? error.message : 'Please try different locations',
         variant: 'destructive',
       });
     } finally {
@@ -83,22 +117,16 @@ export function Navigation({ origin, onBack }: NavigationProps) {
     }
   };
 
-  // Function to geocode an address to coordinates
-  const geocodeLocation = async (query: string) => {
-    try {
-      const response = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
-          query
-        )}.json?access_token=${mapboxgl.accessToken}`
-      );
-      const data = await response.json();
-      if (data.features && data.features.length > 0) {
-        return data.features[0].center as [number, number];
-      }
-    } catch (error) {
-      console.error('Geocoding error:', error);
+  const useCurrentLocation = () => {
+    if (!currentLocation) {
+      toast({
+        title: 'Location not available',
+        description: 'Please enable location services or enter an address',
+        variant: 'destructive',
+      });
+      return;
     }
-    return null;
+    setStartLocation(null);
   };
 
   const startNavigation = () => {
@@ -136,9 +164,9 @@ export function Navigation({ origin, onBack }: NavigationProps) {
             <ChevronLeft className="h-6 w-6" />
           </Button>
           <div className="flex-1">
-            <h2 className="text-lg font-semibold">Generate a Route</h2>
+            <h2 className="text-lg font-semibold">Navigation</h2>
             <p className="text-sm opacity-80">
-              Create a loop route starting from any location
+              Enter your destination to start
             </p>
           </div>
         </div>
@@ -147,27 +175,40 @@ export function Navigation({ origin, onBack }: NavigationProps) {
       {/* Route Generator */}
       <Card className="absolute top-20 left-4 right-4 z-10 p-4 bg-background/95 backdrop-blur shadow-lg">
         <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <MapPin className="h-5 w-5 text-purple-500" />
-            <Input
-              placeholder="Enter start location"
-              value={startLocation}
-              onChange={(e) => setStartLocation(e.target.value)}
+          {/* Start Location */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Start Location</label>
+            <div className="flex items-center gap-2">
+              <LocationSearch
+                placeholder={currentLocation ? "Using current location" : "Enter start location"}
+                onLocationSelect={setStartLocation}
+                initialValue={startLocation?.place_name || ''}
+                className="flex-1"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={useCurrentLocation}
+                disabled={!currentLocation || isGeneratingRoute}
+                title="Use current location"
+              >
+                <Crosshair className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* End Location */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Destination</label>
+            <LocationSearch
+              placeholder="Enter destination"
+              onLocationSelect={setEndLocation}
+              initialValue={endLocation?.place_name || ''}
               className="flex-1"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">
-              Desired distance: {desiredDistance} km
-            </label>
-            <Slider
-              value={[desiredDistance]}
-              onValueChange={([value]) => setDesiredDistance(value)}
-              min={1}
-              max={10}
-              step={0.5}
-            />
-          </div>
+
+          {/* Action Buttons */}
           <div className="flex gap-2">
             <Button
               className="flex-1"
@@ -179,7 +220,7 @@ export function Navigation({ origin, onBack }: NavigationProps) {
               ) : (
                 <Search className="h-4 w-4 mr-2" />
               )}
-              Generate Loop Route
+              Get Directions
             </Button>
             {currentRoute && (
               <Button
